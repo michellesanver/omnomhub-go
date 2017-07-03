@@ -1,0 +1,88 @@
+- name: Java
+  sudo: true
+  command: add-apt-repository ppa:webupd8team/java
+
+- name: accept oracle license
+  sudo: true
+  debconf: name='oracle-java8-installer' question='shared/accepted-oracle-license-v1-1' value='true' vtype='select'
+
+- name: Run the equivalent of "apt-get update" as a separate step
+  sudo: true
+  apt:
+    update_cache: yes
+
+- name: Java install
+  sudo: true
+  apt:
+    name: oracle-java8-installer
+    state: latest
+    force: yes
+
+- name: Add key for Neo4j repo
+  apt_key: url=http://debian.neo4j.org/neotechnology.gpg.key state=present
+  sudo: yes
+
+- name: Add Neo4j repo to sources list
+  apt_repository: repo='deb http://debian.neo4j.org/repo stable/' state=present
+  sudo: yes
+
+- name: Update apt cache
+  apt: update-cache=yes cache_valid_time=86400
+  sudo: yes
+
+- name: Update all packages
+  apt: upgrade=dist
+  sudo: yes
+
+- name: Install Neo4j packages
+  sudo: yes
+  apt: pkg={{ item }} state=installed update_cache=yes force=yes
+  tags: [packages]
+  with_items:
+    - neo4j
+
+- name: Update /etc/security/limits.conf file (1/2)
+  sudo: yes
+  lineinfile: dest=/etc/security/limits.conf
+              insertbefore='# End of file'
+              line='neo4j             soft    nofile          40000'
+              state=present
+
+- name: Update /etc/security/limits.conf file (2/2)
+  sudo: yes
+  lineinfile: dest=/etc/security/limits.conf
+              insertbefore='# End of file'
+              line='neo4j             hard    nofile          40000'
+              state=present
+
+- name: Update /etc/pam.d/su file
+  sudo: yes
+  lineinfile: dest=/etc/pam.d/su
+              regexp="^session    required   pam_limits.so"
+              insertafter='^# session    required   pam_limits.so'
+              line="session    required   pam_limits.so"
+              state=present
+
+- name: Update neo4j.conf to enable remote users to login to neo4j
+  sudo: yes
+  lineinfile: dest=/etc/neo4j/neo4j.conf
+              regexp="^dbms.connectors.default_listen_address=0.0.0.0"
+              insertafter='^#dbms.connectors.default_listen_address=0.0.0.0'
+              line="dbms.connectors.default_listen_address=0.0.0.0"
+              state=present
+
+- name: Update neo4j.conf to disable authentication
+  sudo: yes
+  lineinfile: dest=/etc/neo4j/neo4j.conf
+              regexp="^dbms.security.auth_enabled=false"
+              insertafter='^#dbms.security.auth_enabled=false'
+              line="dbms.security.auth_enabled=false"
+              state=present
+
+- name: Stop Neo4J if it is running
+  sudo: yes
+  service: name=neo4j state=stopped
+
+- name: Start Neo4J as root user
+  service: name=neo4j state=running
+  sudo: yes
