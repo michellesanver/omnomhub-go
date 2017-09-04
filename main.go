@@ -4,6 +4,7 @@ import (
 	"net/http"
 	log "github.com/Sirupsen/logrus"
 	"github.com/michellesanver/omnomhub-go/user"
+	"github.com/michellesanver/omnomhub-go/recipe"
 )
 
 type User struct {
@@ -12,5 +13,6 @@ type User struct {
 
 func main() {
 	http.HandleFunc("/user", user.PostUser)
+	http.HandleFunc("/recipe", recipe.PostRecipe)
 	log.Fatal(http.ListenAndServe(":8082", nil))
 }
