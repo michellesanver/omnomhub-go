@@ -13,6 +13,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 	"github.com/johnnadratowski/golang-neo4j-bolt-driver/errors"
 	"github.com/johnnadratowski/golang-neo4j-bolt-driver/structures/messages"
+	"io"
+	"github.com/johnnadratowski/golang-neo4j-bolt-driver/structures/graph"
 )
 
 type User struct {
@@ -20,6 +22,7 @@ type User struct {
 	Email    string `json:"email"`
 	DisplayName string `json:"display_name"`
 	Password string `json:"password"`
+	Salt string `json:"salt"`
 }
 
 type appError struct {
@@ -35,12 +38,11 @@ func SaveUser(rw http.ResponseWriter, req *http.Request) {
 		panic(err)
 	}
 
-	log.Println(string(body))
-
 	var u User
 	err = json.Unmarshal(body, &u)
 
 	if err != nil {
+		http.Error(rw, "Bread is burnt!", 500)
 		panic(err)
 	}
 
@@ -54,8 +56,11 @@ func SaveUser(rw http.ResponseWriter, req *http.Request) {
 		err = CreateUser(u, rw)
 
 		if err != nil {
-
+			http.Error(rw, "Bread is burnt!", 500)
+			return
 		}
+
+		rw.WriteHeader(http.StatusCreated)
 	}
 
 	if req.Method == "POST" {
@@ -73,13 +78,13 @@ func CreateUser(u User, rw http.ResponseWriter) (error) {
 		return err;
 	}
 
-	stmt, err := conn.PrepareNeo("CREATE (node:User {id:{id}, display_name:{display_name}, email:{email}, password:{password}})")
+	stmt, err := conn.PrepareNeo("CREATE (node:User {id:{id}, display_name:{display_name}, email:{email}, password:{password}, salt:{salt}})")
 
 	if err != nil {
 		return err;
 	}
 
-	hashedPassword, err := hashPassword(u.Password)
+	hashedPassword, salt, err := hashPassword(u.Password)
 
 	if err != nil {
 		return err;
@@ -90,6 +95,7 @@ func CreateUser(u User, rw http.ResponseWriter) (error) {
 		"display_name": u.DisplayName,
 		"email": u.Email,
 		"password": hashedPassword,
+		"salt": salt,
 	})
 
 	if err != nil {
@@ -98,17 +104,18 @@ func CreateUser(u User, rw http.ResponseWriter) (error) {
 		switch v := err.(type) {
 		case *errors.Error:
 			err = handleDbError(v.Inner(), rw)
-			return 0, err
+			return err
 		default:
 			http.Error(rw, err.Error(), 500)
-			return 0, err
+			return err
 		}
 	}
 
 	numResult, err := result.RowsAffected()
 
 	if numResult == 0 {
-		return error("No user was created.")
+		http.Error(rw, err.Error(), 500)
+		return errors.New("Failed to create user")
 	}
 
 	if err != nil {
@@ -121,6 +128,84 @@ func CreateUser(u User, rw http.ResponseWriter) (error) {
 	stmt.Close()
 
 	return err
+}
+
+func AuthUser(rw http.ResponseWriter, req *http.Request) {
+	body, err := ioutil.ReadAll(req.Body)
+
+	if err != nil {
+		http.Error(rw, "Bread is burnt!", 500)
+		log.Warn(err.Error())
+		return
+	}
+
+	type anonymousUser struct {
+		Email   string
+		Password string
+	}
+
+	var au anonymousUser
+	err = json.Unmarshal(body, &au)
+	driver := bolt.NewDriver()
+	// @TODO: Put this in a config
+	conn, err := driver.OpenNeo("bolt://api.omnomhub.dev:7687")
+	defer conn.Close()
+
+	if err != nil {
+		http.Error(rw, "Bread is burnt! We will be back soon...", 500)
+		log.Warn(err.Error())
+		return
+	}
+
+	stmt, err := conn.PrepareNeo("MATCH (u:User {email:{email}}) return u")
+	defer stmt.Close()
+
+	if err != nil {
+		http.Error(rw, "Looks like someone left the pan on too long...", 500)
+		log.Warn(err.Error())
+		return
+	}
+
+	result, err := stmt.QueryNeo(map[string]interface{}{
+		"email": au.Email,
+	})
+
+	if err != nil {
+		http.Error(rw, "Looks like someone left the pan on too long...", 500)
+		log.Warn(err.Error())
+		return
+	}
+
+	for err == nil {
+		var row []interface{}
+		row, _, err = result.NextNeo()
+		if err != nil && err != io.EOF {
+			panic(err)
+		} else if err != io.EOF {
+			fmt.Printf("Node properties: %#v\n", row[0].(graph.Node)) // Prints all properties
+		}
+	}
+
+	log.Info(result.Metadata())
+
+	//var u User
+	//err = json.Unmarshal(result.Metadata(), &u)
+
+	if err != nil {
+		http.Error(rw, "OH NO!!! Firealarm...", 500)
+	}
+
+	/*
+	//verify password
+	saltAndPassword := append([]byte(au.Password), []byte(u.Salt)...)
+	err = bcrypt.CompareHashAndPassword([]byte(u.Password), saltAndPassword)
+
+	if err != nil {
+		http.Error(rw, "Password incorrect.", 403)
+		return
+	}*/
+
+	rw.WriteHeader(http.StatusOK)
 }
 
 func handleDbError(err error, rw http.ResponseWriter) (error) {
@@ -140,7 +225,7 @@ func handleDbError(err error, rw http.ResponseWriter) (error) {
 	return err;
 }
 
-func hashPassword(p string) (string, error) {
+func hashPassword(p string) (string, string, error) {
 	size := 32
 	rb := make([]byte, size)
 	_, err := rand.Read(rb)
@@ -150,12 +235,5 @@ func hashPassword(p string) (string, error) {
 	saltAndPassword := append([]byte(p), []byte(generatedSalt)...)
 	hashedPassword, err := bcrypt.GenerateFromPassword(saltAndPassword, 10)
 
-	return string(hashedPassword), err
-}
-
-func checkServerError(rw http.ResponseWriter, err error, eMsg string) {
-	if err != nil {
-		http.Error(rw, eMsg, 500)
-		panic(err)
-	}
+	return string(hashedPassword), string(generatedSalt), err
 }

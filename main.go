@@ -13,6 +13,7 @@ type User struct {
 
 func main() {
 	http.HandleFunc("/user", user.SaveUser)
+	http.HandleFunc("/user/login", user.AuthUser)
 	http.HandleFunc("/recipe", recipe.PostRecipe)
 	log.Fatal(http.ListenAndServe(":8082", nil))
 }
